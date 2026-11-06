@@ -1,4 +1,4 @@
-# Broken-Access-Control-to-Unathorized-S3-File-modification-to-SSTI-to-RCE
+# Broken Access Control -> Unathorized S3 File modification -> SSTI -> RCE
 
 
 # **Vulnerability Definition & Executive Summary**
