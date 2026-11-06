@@ -26,7 +26,7 @@ Additional findings resulting from the RCE include:
 
 On **northline.prod.local:9080** through **/api/data/project_memberships**, the HTTP requests containing a manipulated `project_id` and `role` parameter within the JSON payload were transmitted during invitation redemption, bypassing ownership validation checks between the issued invitation token and the target workspace.
 
-As a result, the attacker can associate their authenticated user account with any customer project on the platform with elevated `editor` permissions, granting unauthorized read access to the workspace. 
+As a result, the attacker can associate their authenticated user account with any customer project/workspace on the platform with elevated `editor` permissions, granting unauthorized read access to the workspace. 
 
 
 ## Proof of Concept
