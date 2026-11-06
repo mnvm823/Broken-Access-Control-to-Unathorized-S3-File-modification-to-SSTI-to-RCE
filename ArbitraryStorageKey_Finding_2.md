@@ -1,4 +1,4 @@
-# Finding 2 — Arbitrary Storage Key in Pre-Signed Uploads
+# Finding 2:  Arbitrary Storage Key in Pre-Signed Uploads
 
 ## Vulnerability Definition & Executive Summary
 
