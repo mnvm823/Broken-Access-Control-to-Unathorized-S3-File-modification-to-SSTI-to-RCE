@@ -74,11 +74,9 @@ We can confirm the effect by checking our dashboard, and observe that we have su
 
 
 
-- Additionally, we can view the Personal Details of the members of the compromised workspace via the Team tab.
+- Additionally, we can view the Personal Details such as Full Name and Email Address of the members of the compromised workspace via the Team tab.
 
 <img width="1913" height="962" alt="image" src="https://github.com/user-attachments/assets/21acd9a5-b904-4e15-8ef3-cdb1206a49e2" />
-
-Observe that we can see the member's Full Name and their email address.
 
 # Finding 2: 
 
