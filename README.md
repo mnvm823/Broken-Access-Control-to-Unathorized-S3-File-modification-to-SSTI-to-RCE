@@ -33,13 +33,14 @@ As a result, the attacker can associate their authenticated user account with an
 
 ### Proof of Concept
 
-- Inviting myself into the workspace via the invitation link access. I created a new account named Bob. Then created an invitation meant for Bob.
+- Create an account on the platform.
+- Navigate to the TEAM tab and then create an invitation link. In our case, I've created a new account named Bob. Then created an invitation meant for Bob.
 
 <img width="1901" height="948" alt="image" src="https://github.com/user-attachments/assets/916b4f2d-24ed-4059-ad20-d0057e658c3d" />
 
 
 
-- When accessing the generated link, we can observe that we can set the UUID of the project that we want to invite bob into, so we can replace it with the target/victim's UUID in the intercepted **POST request** when clicking "Join Team". As a result, Bob is invited as an Editor to the victim's workspace.
+- Access the generated link, we can observe that we can set the UUID of the project that we want to invite bob into, so we can replace it with the target/victim's UUID in the intercepted **POST request** when clicking "Join Team". As a result, Bob is invited as an Editor to the victim's workspace.
 
 <img width="1892" height="886" alt="image" src="https://github.com/user-attachments/assets/246aea05-46f8-4b30-a1c5-8de4bb799bbf" />
 
@@ -97,7 +98,7 @@ As a result, the attacker can leverage the generated pre-signed URL to upload an
 
 <img width="1568" height="750" alt="image" src="https://github.com/user-attachments/assets/026c4f6d-3041-4a1c-a6cb-0d9838b14ac6" />
 
-
+- Using the exploit from the previous finding to obtain `editor` access to the workspace to be able to exploit this vulnerability.
 - To generate a valid AWS HMAC-SHA256 pre-signed **PUT** URL, send the following **POST request**:
 
 ```http
@@ -129,8 +130,10 @@ Observe that the server responded with a PUT URL that we can now use to modify t
 
 - To modify the rendering template asset, send the following **PUT request**, inserting the PUT URL parameters noted within the previous step.
 
+*NOTE: Make sure to replace the `{REPLACE_PUT_URL_ENDPOINT}` in the request with the generated PUT URL endpoint. In our case, I have used the generated value within my session.*
+
 ```http
-PUT /nl-assets/projects/{target_workspace_uuid}/render/layout.html?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=northline-root%2F20261007%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20261007T035045Z&X-Amz-Expires=600&X-Amz-SignedHeaders=host&X-Amz-Signature=5b163533a44710b39e05b63d43c2aa3204c436e5fc4b3cc03a945de2f15c2739 HTTP/1.1
+PUT {REPLACE_PUT_URL_ENDPOINT} HTTP/1.1
 Host: northline.prod.local:9080
 User-Agent: Mozilla/5.0 (X11; Linux x86_64; rv:109.0) Gecko/20100101 Firefox/115.0
 Accept: */*
@@ -174,9 +177,7 @@ As a result, the attacker can access `self.__init__.__globals__.sys.modules['__m
 
 ### Proof of Concept
 
-- Using the unauthorized rendering template modification vulnerability from the previous step, we can confirm that the web application is vulnerable to SSTI, by sending the following request.
-
-*NOTE: Make sure to replace the PUT URL request with the generated URL from the previous finding. In our case, I have used the generated value within my session.*
+- Using the unauthorized rendering template modification vulnerability from the previous finding, we can confirm that the web application is vulnerable to SSTI, by sending the following request.
 
 ```http
 PUT /nl-assets/projects/{target_workspace_uuid}/render/layout.html?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=northline-root%2F20261007%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20261007T040115Z&X-Amz-Expires=600&X-Amz-SignedHeaders=host&X-Amz-Signature=3cc5e2d6c0c930e1f33bda5e42f5e0c5f3ad8c0b9213e9e5fccd63694f4272e1 HTTP/1.1
