@@ -18,7 +18,9 @@ Additional findings resulting from the RCE include:
 - **Worker Service Source Code**
 
 
-# Finding 1: Broken Access Control on northline.prod.local:9080 through /api/data/project_memberships via POST Parameter "project_id" leading to unauthorized workspace invitation 
+# Finding 1
+
+## Broken Access Control on northline.prod.local:9080 through /api/data/project_memberships via POST Parameter "project_id" leading to unauthorized workspace invitation 
 
 - **Target:** **northline.prod.local:9080**
 - Vulnerable Endpoint: **POST /api/data/project_memberships**
@@ -29,7 +31,7 @@ On **northline.prod.local:9080** through **/api/data/project_memberships**, the 
 As a result, the attacker can associate their authenticated user account with any customer project/workspace on the platform with elevated `editor` permissions, granting unauthorized read access to the workspace. 
 
 
-## Proof of Concept
+### Proof of Concept
 
 - Inviting myself into the workspace via the invitation link access. I created a new account named Bob. Then created an invitation meant for Bob.
 
@@ -78,7 +80,9 @@ We can confirm the effect by checking our dashboard, and observe that we have su
 
 Observe that we can see the member's Full Name and their email address.
 
-# Finding 2: Arbitrary Storage Key Path Manipulation (S3 Pre-Signed Uploads) on northline.prod.local:9080 through /api/projects/{project_id}/uploads/sign via POST parameter "key" leading to unauthorized modification of rendering templates
+# Finding 2: 
+
+## Arbitrary Storage Key Path Manipulation (S3 Pre-Signed Uploads) on northline.prod.local:9080 through /api/projects/{project_id}/uploads/sign via POST parameter "key" leading to unauthorized modification of rendering templates
 
 - Target: **northline.prod.local:9080**
 - Vulnerable Endpoint: **POST /api/projects/{project_id}/uploads/sign**
@@ -89,7 +93,7 @@ On **northline.prod.local:9080** through **/api/projects/{project_id}/uploads/si
 As a result, the attacker can leverage the generated pre-signed URL to upload and overwrite internal server-side template files on the underlying object storage bucket **/nl-assets/**. This allows the attacker to replace trusted rendering layouts with malicious template payloads.
 
 
-## Proof of Concept 
+### Proof of Concept 
 
 - Checking the Templates web page, we can observe that it utilizes jinja rendering.
 
@@ -150,12 +154,13 @@ Connection: keep-alive
 
 
 
-# Finding 3: Server-Side Template Injection (SSTI) on northline.prod.local:9080 through /nl-assets/projects/{target_workspace_uuid}/render/layout.html leading to Remote Code Execution (RCE)
+# Finding 3:
+## Server-Side Template Injection (SSTI) on northline.prod.local:9080 through /nl-assets/projects/{target_workspace_uuid}/render/layout.html leading to Remote Code Execution (RCE)
  
 - Target: **northline.prod.local:9080**
 - Vulnerable Component: Jinja2 Template Engine (`jinja2.Environment.from_string().render()`)
 - Vulnerable Routine / File: `/app/worker.py` (Background Build Worker)
-- Trigger Vector: Studio Build Preview Workflow (via the web application dashbaord)**
+- Trigger Vector: Studio Build Preview Workflow (via the web application dashboard)**
 
 
 On **northline.prod.local:9080** through **/nl-assets/projects/{target_workspace_id}/render/layout.html** and the Studio preview worker trigger, HTTP requests containing custom Jinja2 expressions were injected into the template layout, which was subsequently evaluated by Python's Jinja2 runtime without context sandboxing or expression filtering.
@@ -164,7 +169,7 @@ On **northline.prod.local:9080** through **/nl-assets/projects/{target_workspace
 As a result, the attacker can access `self.__init__.__globals__.sys.modules['__main__'].os.popen()` to execute arbitrary operating system commands within the preview worker container, leading to Remote Code Execution (RCE).
 
 
-## Proof of Concept
+### Proof of Concept
 
 - Using the unauthorized rendering template modification vulnerability from the previous step, we can confirm that the web application is vulnerable to SSTI, by sending the following request:
 
