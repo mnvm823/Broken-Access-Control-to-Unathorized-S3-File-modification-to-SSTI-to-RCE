@@ -27,15 +27,15 @@ _
 
 ### Proof of Concept
 
-1Register or sign in to an account controlled by the tester.
-2. In a workspace the tester controls, create an invitation for that account.
-3. Open the invitation link and proceed to **Join Project**.
+- Register or sign in to an account controlled by the tester.
+- In a workspace the tester controls, create an invitation for that account.
+- Open the invitation link and proceed to **Join Project**.
 
 <img width="1892" height="886" alt="image" src="https://github.com/user-attachments/assets/6ff3aaed-b8ed-40ca-9f91-2bbbb61316df" />
 
 
-4. Intercept the membership **POST request** to **/api/data/project_memberships**.
-5. Replace `project_id` value with the target workspace ID. Retain the current user's `user_id` and set `role` to `editor` as in the captured request.
+- Intercept the membership **POST request** to **/api/data/project_memberships**.
+- Replace `project_id` value with the target workspace ID. Retain the current user's `user_id` and set `role` to `editor` as in the captured request.
 
 ```http
 POST /api/data/project_memberships HTTP/1.1
@@ -58,11 +58,11 @@ Connection: keep-alive
 }
 ```
 
-6. Submit the request. The server returned `201 Created`.
+- Submit the request. The server returned `201 Created`.
    
 <img width="1532" height="800" alt="image" src="https://github.com/user-attachments/assets/ba76f9b1-18a4-476e-a87e-e9679f6bb6b1" />
 
-7. Refresh the dashboard and confirm that the account appears in the target workspace. Open the Team view to confirm the accessible member details.
+- Refresh the dashboard and confirm that the account appears in the target workspace. Open the Team view to confirm the accessible member details.
 
 
 A successful response and subsequent dashboard access demonstrate that the membership was created in the target workspace.
