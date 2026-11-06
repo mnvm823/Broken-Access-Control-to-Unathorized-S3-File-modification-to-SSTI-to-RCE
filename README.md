@@ -86,9 +86,9 @@ We can confirm the effect by checking our dashboard, and observe that we have su
 - Vulnerable Endpoint: **POST /api/projects/{project_id}/uploads/sign**
 - Vulnerable Component: POST parameter `key`
 
-On **northline.prod.local:9080** through **/api/projects/{project_id}/uploads/sign**, the **POST** requests supplying arbitrary file paths inside the `key` parameter were transmitted, allowing the generation of valid AWS HMAC-SHA256 pre-signed **PUT** URLs pointing outside the legitimate user asset namespace (**projects/{own_project_id}/assets/**) and directly targeting backend rendering templates (**projects/{victim_project_id}/render/layout.html**).
+On **northline.prod.local:9080** the **POST request** to **/api/projects/{project_id}/uploads/sign** accepts an arbitrary storage `key` instead of limiting uploads to the caller's asset directory. A request for a key under **projects/<target-project-id>/render/** was signed successfully. The resulting pre-signed URL permitted a PUT to **render/layout.html**, outside the intended **projects/<authorized-project-id>/assets/** namespace. This finding is exploitable after obtaining editor access to the target workspace (for example, through Finding 1).
 
-As a result, the attacker can leverage the generated pre-signed URL to upload and overwrite internal server-side template files on the underlying object storage bucket **/nl-assets/**. This allows the attacker to replace trusted rendering layouts with malicious template payloads.
+As a result, the attacker can leverage the generated pre-signed URL to upload and overwrite template files on the underlying object storage bucket **/nl-assets/**. This allows the attacker to replace trusted rendering layouts with malicious template payloads.
 
 
 ### Proof of Concept 
