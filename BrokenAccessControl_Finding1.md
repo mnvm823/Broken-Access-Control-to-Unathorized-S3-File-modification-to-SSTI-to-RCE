@@ -34,8 +34,7 @@ _
 <img width="1892" height="886" alt="image" src="https://github.com/user-attachments/assets/6ff3aaed-b8ed-40ca-9f91-2bbbb61316df" />
 
 
-- Intercept the membership **POST request** to **/api/data/project_memberships**.
-- Replace `project_id` value with the target workspace ID. Retain the current user's `user_id` and set `role` to `editor` as in the captured request.
+- Intercept the membership **POST request** to **/api/data/project_memberships** and replace `project_id` value with the target workspace ID. Retain the current user's `user_id` and set `role` to `editor` as in the captured request.
 
 ```http
 POST /api/data/project_memberships HTTP/1.1
