@@ -1,4 +1,4 @@
-# Broken Access Control -> Unathorized S3 File modification -> SSTI -> RCE
+# Broken Access Control -> Unauthorized S3 File modification -> SSTI -> RCE
 
 *NOTE: This report is for educational purposes only. The target environment was an authorized offensive security CTF challenge. DO NOT attempt to target or test systems that you do not own or do not have explicit permission to test.*
 
