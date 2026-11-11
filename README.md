@@ -368,13 +368,8 @@ if __name__ == "__main__":
     main()
 ```
 
-
-
-## Impact
-
-An attacker with editor access to a target workspace can execute commands in the preview worker container with the privileges of the worker process. The assessment demonstrated access to worker environment variables, application source code, and mounted secret files. The worker also had access to internal service endpoints, increasing the potential impact if its network and credentials are not tightly constrained.
-
 *NOTE: No destructive actions or denial-of-service tests were performed. Arbitrary command execution could nevertheless disrupt or terminate worker processes, which is reflected in the provisional availability rating.*
+
 
 
 ---
