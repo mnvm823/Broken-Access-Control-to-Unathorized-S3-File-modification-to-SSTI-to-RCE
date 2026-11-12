@@ -2,6 +2,9 @@
 
 > *NOTE: This report is for educational purposes only. The target environment was an authorized offensive security CTF challenge. DO NOT attempt to target or test systems that you do not own or do not have explicit permission to test.*
 
+> You may view individual write-up for each finding by visiting the individual files (e.g. BrokenAccessControl_Finding1.md)
+
+
 # **Vulnerability Definition & Executive Summary**
 
 The Northline Pages publishing platform suffers from Broken Access Control / Insecure Direct Object Reference (IDOR), followed by unrestricted S3 pre-signed upload key manipulation, and Server-Side Template Injection (SSTI) leading to a Remote Code Execution.
