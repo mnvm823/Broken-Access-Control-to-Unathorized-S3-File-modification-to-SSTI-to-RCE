@@ -7,7 +7,7 @@
 
 # **Vulnerability Definition & Executive Summary**
 
-The Northline Pages publishing platform suffers from Broken Access Control / Insecure Direct Object Reference (IDOR), followed by unrestricted S3 pre-signed upload key manipulation, and Server-Side Template Injection (SSTI) leading to a Remote Code Execution.
+The Northline publishing platform suffers from Broken Access Control / Insecure Direct Object Reference (IDOR), followed by unrestricted S3 pre-signed upload key manipulation, and Server-Side Template Injection (SSTI) leading to a Remote Code Execution.
 
 The flawed authorization logic occurs within the project invitation and membership assignment routine allowing an authenticated user to modify the target `project_id` during invitation acceptance. This allows the attacker to invite themselves into the victim's workspace, granting unauthorized editor privileges.
 
