@@ -443,7 +443,7 @@ if __name__ == "__main__":
 # Remediation
 
 - Implementing Server-Side Authorization on Invitation Acceptance:
-   - In the **POST request** to **/api/data/project_memberships** handler, remove `project_id` and role from the accepted client request body.
+   - In the **POST request** to **/api/data/project_memberships** handler, remove `project_id` from the accepted client request body.
    - When the user redeems an invite token (from **/invite/{token}**), query the database for that specific invitation record on the backend, verify it is still valid and not expired, and automatically assign the `project_id` and role defined by the original owner in that record.
 
 - Enforce Directory and File Path Whitelisting in S3 Pre-Signing:
